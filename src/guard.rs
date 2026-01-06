@@ -26,7 +26,8 @@ use opentelemetry_sdk::resource::ResourceBuilder;
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder as TraceBatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider,
 };
-use tonic::metadata::{MetadataKey, MetadataValue};
+use std::collections::HashMap;
+use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -199,21 +200,21 @@ impl Drop for OtelGuard {
         if let Some(provider) = self.tracer_provider.take() {
             let _ = provider.force_flush();
             if let Err(e) = provider.shutdown() {
-                eprintln!("Error shutting down tracer provider: {e}");
+                tracing::error!(target: "otel_lifecycle", error = %e, "Failed to shut down tracer provider");
             }
         }
 
         if let Some(provider) = self.logger_provider.take() {
             let _ = provider.force_flush();
             if let Err(e) = provider.shutdown() {
-                eprintln!("Error shutting down logger provider: {e}");
+                tracing::error!(target: "otel_lifecycle", error = %e, "Failed to shut down logger provider");
             }
         }
 
         if let Some(provider) = self.meter_provider.take() {
             let _ = provider.force_flush();
             if let Err(e) = provider.shutdown() {
-                eprintln!("Error shutting down meter provider: {e}");
+                tracing::error!(target: "otel_lifecycle", error = %e, "Failed to shut down meter provider");
             }
         }
     }
@@ -307,6 +308,19 @@ fn add_lambda_attributes(builder: ResourceBuilder) -> ResourceBuilder {
     builder.with_attributes(attrs)
 }
 
+fn build_tonic_metadata(headers: &HashMap<String, String>) -> MetadataMap {
+    let mut metadata = MetadataMap::new();
+    for (key, value) in headers {
+        if let (Ok(k), Ok(v)) = (
+            key.parse::<MetadataKey<_>>(),
+            value.parse::<MetadataValue<_>>(),
+        ) {
+            metadata.insert(k, v);
+        }
+    }
+    metadata
+}
+
 fn build_tracer_provider(
     config: &OtelSdkConfig,
     resource: Resource,
@@ -320,16 +334,7 @@ fn build_tracer_provider(
                 .with_timeout(config.endpoint.timeout);
 
             if !config.endpoint.headers.is_empty() {
-                let mut metadata = tonic::metadata::MetadataMap::new();
-                for (key, value) in &config.endpoint.headers {
-                    if let (Ok(k), Ok(v)) = (
-                        key.parse::<MetadataKey<_>>(),
-                        value.parse::<MetadataValue<_>>(),
-                    ) {
-                        metadata.insert(k, v);
-                    }
-                }
-                builder = builder.with_metadata(metadata);
+                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
             }
 
             builder.build().map_err(SdkError::TraceExporter)?
@@ -393,16 +398,7 @@ fn build_meter_provider(
                 .with_timeout(config.endpoint.timeout);
 
             if !config.endpoint.headers.is_empty() {
-                let mut metadata = tonic::metadata::MetadataMap::new();
-                for (key, value) in &config.endpoint.headers {
-                    if let (Ok(k), Ok(v)) = (
-                        key.parse::<MetadataKey<_>>(),
-                        value.parse::<MetadataValue<_>>(),
-                    ) {
-                        metadata.insert(k, v);
-                    }
-                }
-                builder = builder.with_metadata(metadata);
+                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
             }
 
             builder.build().map_err(SdkError::MetricExporter)?
@@ -460,16 +456,7 @@ fn build_logger_provider(
                 .with_timeout(config.endpoint.timeout);
 
             if !config.endpoint.headers.is_empty() {
-                let mut metadata = tonic::metadata::MetadataMap::new();
-                for (key, value) in &config.endpoint.headers {
-                    if let (Ok(k), Ok(v)) = (
-                        key.parse::<MetadataKey<_>>(),
-                        value.parse::<MetadataValue<_>>(),
-                    ) {
-                        metadata.insert(k, v);
-                    }
-                }
-                builder = builder.with_metadata(metadata);
+                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
             }
 
             builder.build().map_err(SdkError::LogExporter)?
