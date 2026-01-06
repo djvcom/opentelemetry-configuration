@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/djvcom/opentelemetry-configuration/compare/v0.2.0...v0.3.0) - 2026-01-06
+
+### Added
+
+- re-export core crates for version compatibility
+
+### Other
+
+- *(builder)* add coverage for with_env, header, and scope name
+- improve test suite quality and fix clippy pedantic warnings
+- remove dead code and improve code quality
+- improve documentation and add guard tests
+- *(guard)* extract tonic metadata helper and use tracing for errors
+- update MSRV to 1.92
+
 ## [0.2.0](https://github.com/djvcom/opentelemetry-configuration/releases/tag/v0.2.0) - 2025-12-24
 
 ### Added
