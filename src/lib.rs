@@ -96,6 +96,11 @@ pub use fallback::{ExportFailure, ExportFallback, FailedRequest, FallbackHandler
 pub use guard::OtelGuard;
 pub use rust_detector::{RustBuildInfo, RustResourceDetector, emit_rustc_env};
 
+// Re-export core crates for version compatibility
+pub use opentelemetry;
+pub use opentelemetry_sdk;
+pub use tracing;
+
 // Re-export figment for power users who want to construct their own configuration
 pub use figment;
 
