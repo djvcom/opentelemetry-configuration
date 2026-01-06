@@ -89,7 +89,11 @@ impl OtelGuard {
                 .clone()
                 .or_else(|| config.resource.service_name.clone())
                 .unwrap_or_else(|| "opentelemetry-configuration".to_string());
-            init_subscriber(tracer_provider.as_ref(), logger_provider.as_ref(), scope_name)?;
+            init_subscriber(
+                tracer_provider.as_ref(),
+                logger_provider.as_ref(),
+                scope_name,
+            )?;
         }
 
         Ok(Self {
@@ -535,7 +539,9 @@ mod tests {
             Some("Bearer token123")
         );
         assert_eq!(
-            metadata.get("x-custom-header").and_then(|v| v.to_str().ok()),
+            metadata
+                .get("x-custom-header")
+                .and_then(|v| v.to_str().ok()),
             Some("value")
         );
     }
@@ -563,7 +569,10 @@ mod tests {
     fn build_tonic_metadata_skips_invalid_values() {
         let mut headers = HashMap::new();
         headers.insert("valid-key".to_string(), "valid-value".to_string());
-        headers.insert("invalid-value-key".to_string(), "value\0with\0nulls".to_string());
+        headers.insert(
+            "invalid-value-key".to_string(),
+            "value\0with\0nulls".to_string(),
+        );
 
         let metadata = build_tonic_metadata(&headers);
 

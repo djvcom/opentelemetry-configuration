@@ -707,15 +707,19 @@ mod tests {
 
     #[test]
     fn with_standard_env_maps_unknown_protocol_to_default() {
-        temp_env::with_var("OTEL_EXPORTER_OTLP_PROTOCOL", Some("unknown-protocol"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert_eq!(
-                config.endpoint.protocol,
-                Protocol::HttpBinary,
-                "Unknown protocol should fall back to HttpBinary"
-            );
-        });
+        temp_env::with_var(
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            Some("unknown-protocol"),
+            || {
+                let builder = OtelSdkBuilder::new().with_standard_env();
+                let config = builder.extract_config().unwrap();
+                assert_eq!(
+                    config.endpoint.protocol,
+                    Protocol::HttpBinary,
+                    "Unknown protocol should fall back to HttpBinary"
+                );
+            },
+        );
     }
 
     #[test]
@@ -738,7 +742,10 @@ url = "http://file-collector:4318"
         temp_env::with_vars(
             [
                 ("OTEL_SERVICE_NAME", Some("env-service")),
-                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://env-collector:4318")),
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("http://env-collector:4318"),
+                ),
             ],
             || {
                 let builder = OtelSdkBuilder::new()
@@ -790,15 +797,49 @@ enabled = false
             config.resource.service_name,
             Some("toml-service".to_string())
         );
-        assert_eq!(
-            config.resource.service_version,
-            Some("2.0.0".to_string())
-        );
+        assert_eq!(config.resource.service_version, Some("2.0.0".to_string()));
         assert_eq!(
             config.endpoint.url,
             Some("http://toml-collector:4318".to_string())
         );
         assert_eq!(config.endpoint.protocol, Protocol::Grpc);
         assert!(!config.traces.enabled);
+    }
+
+    #[test]
+    fn with_env_reads_prefixed_environment_variables() {
+        temp_env::with_var("MYAPP_ENDPOINT_URL", Some("http://custom:4318"), || {
+            let builder = OtelSdkBuilder::new().with_env("MYAPP_");
+            let config = builder.extract_config().unwrap();
+            assert_eq!(config.endpoint.url, Some("http://custom:4318".to_string()));
+        });
+    }
+
+    #[test]
+    fn header_adds_to_endpoint_headers() {
+        let builder = OtelSdkBuilder::new()
+            .header("X-Custom", "value1")
+            .header("X-Another", "value2");
+        let config = builder.extract_config().unwrap();
+
+        assert_eq!(
+            config.endpoint.headers.get("X-Custom"),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            config.endpoint.headers.get("X-Another"),
+            Some(&"value2".to_string())
+        );
+    }
+
+    #[test]
+    fn instrumentation_scope_name_overrides_default() {
+        let builder = OtelSdkBuilder::new().instrumentation_scope_name("custom-scope");
+        let config = builder.extract_config().unwrap();
+
+        assert_eq!(
+            config.instrumentation_scope_name,
+            Some("custom-scope".to_string())
+        );
     }
 }

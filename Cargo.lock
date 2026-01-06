@@ -889,7 +889,6 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "serde",
- "serde_json",
  "serial_test",
  "temp-env",
  "tempfile",
