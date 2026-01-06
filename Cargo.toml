@@ -1,0 +1,42 @@
+[package]
+name = "opentelemetry-configuration"
+version = "0.1.2"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Daniel Verrall"]
+description = "Opinionated OpenTelemetry SDK configuration wiring together tracing, OTLP export, and lifecycle management"
+repository = "https://github.com/djvcom/opentelemetry-configuration"
+documentation = "https://docs.rs/opentelemetry-configuration"
+readme = "README.md"
+keywords = ["opentelemetry", "telemetry", "tracing", "otlp", "observability"]
+categories = ["development-tools::profiling", "development-tools::debugging"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+figment = { version = "0.10", features = ["env", "toml"] }
+humantime-serde = "1.1"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-appender-tracing = "0.31"
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "trace", "logs", "metrics"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "with-serde", "trace"] }
+opentelemetry-resource-detectors = "0.10"
+opentelemetry-semantic-conventions = "0.31"
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tonic = "0.14"
+tracing = "0.1"
+tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+mock-collector = "0.2"
+serial_test = "3.2"
+temp-env = { version = "0.3", features = ["async_closure"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
