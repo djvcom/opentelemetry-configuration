@@ -42,6 +42,8 @@ pub use opentelemetry;
 pub use opentelemetry_sdk;
 /// Re-exported for version compatibility with this crate's dependencies.
 pub use tracing;
+/// Re-exported for trace context propagation (e.g., `OpenTelemetrySpanExt::set_parent`).
+pub use tracing_opentelemetry;
 
 /// Re-exported for users who want to construct custom configuration providers.
 pub use figment;
