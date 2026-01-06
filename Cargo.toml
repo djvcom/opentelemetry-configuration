@@ -2,7 +2,7 @@
 name = "opentelemetry-configuration"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.92"
 license = "MIT"
 authors = ["Daniel Verrall"]
 description = "Opinionated OpenTelemetry SDK configuration wiring together tracing, OTLP export, and lifecycle management"
