@@ -166,7 +166,6 @@ impl OtelSdkBuilder {
     /// - `OTEL_METRICS_EXPORTER` → metrics exporter (otlp, none)
     /// - `OTEL_LOGS_EXPORTER` → logs exporter (otlp, none)
     pub fn with_standard_env(mut self) -> Self {
-        // Map standard OTEL env vars to our config structure
         if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
             self.figment = self
                 .figment
@@ -288,7 +287,20 @@ impl OtelSdkBuilder {
         self
     }
 
-    /// Adds a resource attribute.
+    /// Adds a custom resource attribute.
+    ///
+    /// Resource attributes describe the entity producing telemetry. Use this for
+    /// application-specific metadata not covered by standard semantic conventions.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let _guard = OtelSdkBuilder::new()
+    ///     .service_name("my-service")
+    ///     .resource_attribute("git.commit", "abc123")
+    ///     .resource_attribute("feature.flags", "new-ui,beta-api")
+    ///     .build()?;
+    /// ```
     pub fn resource_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.resource_attributes.insert(key.into(), value.into());
         self
@@ -471,7 +483,24 @@ impl OtelSdkBuilder {
 
     /// Adds an HTTP header to all export requests.
     ///
-    /// Useful for authentication or custom routing.
+    /// Headers are applied to trace, metric, and log exporters. Common uses include
+    /// authentication tokens and custom routing metadata.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Bearer token authentication
+    /// let _guard = OtelSdkBuilder::new()
+    ///     .service_name("my-service")
+    ///     .header("Authorization", format!("Bearer {}", api_token))
+    ///     .build()?;
+    ///
+    /// // API key authentication (vendor-specific)
+    /// let _guard = OtelSdkBuilder::new()
+    ///     .service_name("my-service")
+    ///     .header("X-API-Key", api_key)
+    ///     .build()?;
+    /// ```
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let header_key = format!("endpoint.headers.{}", key.into());
         self.figment = self
@@ -561,7 +590,6 @@ impl OtelSdkBuilder {
             .extract()
             .map_err(|e| SdkError::Config(Box::new(e)))?;
 
-        // Merge resource attributes that couldn't go through figment
         config
             .resource
             .attributes
@@ -612,7 +640,6 @@ impl OtelSdkBuilder {
             .extract()
             .map_err(|e| SdkError::Config(Box::new(e)))?;
 
-        // Merge resource attributes that couldn't go through figment
         config.resource.attributes.extend(self.resource_attributes);
 
         if let Some(ref url) = config.endpoint.url

@@ -96,12 +96,14 @@ pub use fallback::{ExportFailure, ExportFallback, FailedRequest, FallbackHandler
 pub use guard::OtelGuard;
 pub use rust_detector::{RustBuildInfo, RustResourceDetector, emit_rustc_env};
 
-// Re-export core crates for version compatibility
+/// Re-exported for version compatibility with this crate's dependencies.
 pub use opentelemetry;
+/// Re-exported for version compatibility with this crate's dependencies.
 pub use opentelemetry_sdk;
+/// Re-exported for version compatibility with this crate's dependencies.
 pub use tracing;
 
-// Re-export figment for power users who want to construct their own configuration
+/// Re-exported for users who want to construct custom configuration providers.
 pub use figment;
 
 /// Captures Rust build-time information as resource attributes.

@@ -33,7 +33,6 @@ impl ResourceDetector for RustResourceDetector {
             KeyValue::new("rust.debug", cfg!(debug_assertions)),
         ];
 
-        // Binary size
         if let Ok(exe_path) = std::env::current_exe()
             && let Ok(metadata) = std::fs::metadata(&exe_path)
         {
@@ -126,19 +125,14 @@ pub fn emit_rustc_env() {
 
     println!("cargo::rerun-if-env-changed=RUSTC");
 
-    // Get rustc path (respect RUSTC env var if set)
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
 
-    // Get rustc version
     if let Ok(output) = Command::new(&rustc).arg("--version").output()
         && let Ok(version_str) = String::from_utf8(output.stdout)
     {
         let version_str = version_str.trim();
-
-        // Full version string: "rustc 1.84.0 (9fc6b4312 2024-01-04)"
         println!("cargo::rustc-env=RUSTC_VERSION_FULL={version_str}");
 
-        // Parse version number: "1.84.0"
         if let Some(version) = version_str.strip_prefix("rustc ")
             && let Some(ver) = version.split_whitespace().next()
         {
@@ -146,13 +140,11 @@ pub fn emit_rustc_env() {
         }
     }
 
-    // Get channel from rustc -vV
     if let Ok(output) = Command::new(&rustc).arg("-vV").output()
         && let Ok(verbose) = String::from_utf8(output.stdout)
     {
         for line in verbose.lines() {
             if let Some(release) = line.strip_prefix("release: ") {
-                // Determine channel from version suffix
                 let channel_name = if release.contains("nightly") {
                     "nightly"
                 } else if release.contains("beta") {

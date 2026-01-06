@@ -231,6 +231,64 @@ This adds:
 - `process.runtime.description` (full rustc version string)
 - `rust.channel` ("stable", "beta", or "nightly")
 
+## Error Handling
+
+The [`SdkError`](https://docs.rs/opentelemetry-configuration/latest/opentelemetry_configuration/enum.SdkError.html) enum covers all failure modes:
+
+| Variant | Cause |
+|---------|-------|
+| `Config` | Invalid configuration (malformed TOML, type mismatches) |
+| `TraceExporter` | Failed to create trace exporter (invalid endpoint, TLS issues) |
+| `MetricExporter` | Failed to create metric exporter |
+| `LogExporter` | Failed to create log exporter |
+| `TracingSubscriber` | Failed to initialise tracing (already initialised) |
+| `Flush` | Failed to flush pending data |
+| `Shutdown` | Failed to shut down providers cleanly |
+| `InvalidEndpoint` | Endpoint URL missing `http://` or `https://` scheme |
+
+```rust
+use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
+
+match OtelSdkBuilder::new().service_name("my-service").build() {
+    Ok(guard) => { /* use guard */ }
+    Err(SdkError::Config(e)) => eprintln!("Configuration error: {e}"),
+    Err(SdkError::InvalidEndpoint { url }) => eprintln!("Bad endpoint: {url}"),
+    Err(e) => eprintln!("SDK error: {e}"),
+}
+```
+
+## Troubleshooting
+
+### No telemetry appearing in collector
+
+1. **Check the endpoint** - Ensure the collector is running and reachable
+2. **Verify the protocol** - HTTP uses port 4318, gRPC uses port 4317
+3. **Check signal enablement** - Signals default to enabled, but verify with `.traces(true)` etc.
+4. **Ensure guard lives long enough** - The guard must not be dropped before telemetry is generated
+
+### "tracing subscriber already initialised" error
+
+Set `init_tracing_subscriber` to `false` if you manage tracing yourself:
+
+```rust
+let _guard = OtelSdkBuilder::new()
+    .service_name("my-service")
+    .init_tracing_subscriber(false)
+    .build()?;
+```
+
+### Connection refused / timeout errors
+
+- Verify the collector endpoint is accessible from your application
+- For gRPC, ensure TLS is configured if required
+- Check firewall rules and network policies
+
+### Missing resource attributes
+
+- `ComputeEnvironment::None` disables all automatic detection
+- Lambda attributes only appear when `AWS_LAMBDA_FUNCTION_NAME` is set (or `ComputeEnvironment::Lambda` is explicit)
+- K8s attributes require the K8s downward API or `ComputeEnvironment::Kubernetes`
+
 ## Licence
 
 MIT

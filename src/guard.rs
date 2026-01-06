@@ -38,6 +38,15 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// configured providers. This ensures telemetry is exported before the
 /// application exits or the execution environment freezes.
 ///
+/// # Drop Behaviour
+///
+/// On drop, each provider (tracer, logger, meter) is:
+/// 1. Flushed to export pending data
+/// 2. Shut down to release resources
+///
+/// Errors during shutdown are logged via `tracing::error` but do not panic.
+/// For explicit error handling, use [`shutdown()`](Self::shutdown) before drop.
+///
 /// # Example
 ///
 /// ```no_run
@@ -45,12 +54,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 ///
 /// fn main() -> Result<(), SdkError> {
 ///     let _guard = OtelSdkBuilder::new()
-///         .service_name("my-lambda")
+///         .service_name("my-service")
 ///         .build()?;
 ///
 ///     tracing::info!("Application running");
 ///
-///     // On drop, all providers are flushed and shut down
+///     // Guard dropped here: providers flushed and shut down automatically
 ///     Ok(())
 /// }
 /// ```
@@ -91,7 +100,6 @@ impl OtelGuard {
             None
         };
 
-        // Set global providers
         if let Some(ref provider) = tracer_provider {
             opentelemetry::global::set_tracer_provider(provider.clone());
         }
@@ -99,14 +107,12 @@ impl OtelGuard {
             opentelemetry::global::set_meter_provider(provider.clone());
         }
 
-        // Set W3C propagators for trace context (traceparent) and baggage headers
         let propagator = TextMapCompositePropagator::new(vec![
             Box::new(TraceContextPropagator::new()),
             Box::new(BaggagePropagator::new()),
         ]);
         opentelemetry::global::set_text_map_propagator(propagator);
 
-        // Initialise tracing subscriber if requested
         if config.init_tracing_subscriber {
             let scope_name = config
                 .instrumentation_scope_name
@@ -223,21 +229,18 @@ impl Drop for OtelGuard {
 fn build_resource(config: &OtelSdkConfig) -> Resource {
     let mut builder = Resource::builder();
 
-    // Run detectors based on compute environment
     match config.resource.compute_environment {
         ComputeEnvironment::Auto => {
-            // Generic detectors (always useful)
             builder = builder
                 .with_detector(Box::new(HostResourceDetector::default()))
                 .with_detector(Box::new(OsResourceDetector))
                 .with_detector(Box::new(ProcessResourceDetector))
                 .with_detector(Box::new(RustResourceDetector));
 
-            // Probe for Lambda
             if std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok() {
                 builder = add_lambda_attributes(builder);
             }
-            // Probe for K8s
+
             if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
                 builder = builder.with_detector(Box::new(K8sResourceDetector));
             }
@@ -258,12 +261,9 @@ fn build_resource(config: &OtelSdkConfig) -> Resource {
                 .with_detector(Box::new(RustResourceDetector))
                 .with_detector(Box::new(K8sResourceDetector));
         }
-        ComputeEnvironment::None => {
-            // No automatic detection
-        }
+        ComputeEnvironment::None => {}
     }
 
-    // Add explicit attributes from config (these take precedence)
     let mut attributes: Vec<KeyValue> = config
         .resource
         .attributes
@@ -542,4 +542,116 @@ fn init_subscriber(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_resource_with_auto_environment_includes_rust_detector() {
+        let config = OtelSdkConfig {
+            resource: crate::config::ResourceConfig {
+                service_name: Some("test-service".to_string()),
+                compute_environment: ComputeEnvironment::Auto,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resource = build_resource(&config);
+
+        let runtime_name = resource
+            .iter()
+            .find(|(k, _)| k.as_str() == "process.runtime.name");
+        assert!(
+            runtime_name.is_some(),
+            "Auto environment should include Rust detector"
+        );
+    }
+
+    #[test]
+    fn build_resource_with_none_environment_excludes_detectors() {
+        let config = OtelSdkConfig {
+            resource: crate::config::ResourceConfig {
+                service_name: Some("test-service".to_string()),
+                compute_environment: ComputeEnvironment::None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resource = build_resource(&config);
+
+        let runtime_name = resource
+            .iter()
+            .find(|(k, _)| k.as_str() == "process.runtime.name");
+        assert!(
+            runtime_name.is_none(),
+            "None environment should not run detectors"
+        );
+    }
+
+    #[test]
+    fn build_resource_includes_service_name() {
+        let config = OtelSdkConfig {
+            resource: crate::config::ResourceConfig {
+                service_name: Some("my-test-service".to_string()),
+                compute_environment: ComputeEnvironment::None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resource = build_resource(&config);
+
+        let service_name = resource
+            .iter()
+            .find(|(k, _)| k.as_str() == "service.name")
+            .map(|(_, v)| v.to_string());
+        assert_eq!(service_name.as_deref(), Some("my-test-service"));
+    }
+
+    #[test]
+    fn build_resource_includes_custom_attributes() {
+        let mut attributes = HashMap::new();
+        attributes.insert("custom.key".to_string(), "custom-value".to_string());
+
+        let config = OtelSdkConfig {
+            resource: crate::config::ResourceConfig {
+                attributes,
+                compute_environment: ComputeEnvironment::None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resource = build_resource(&config);
+
+        let custom_attr = resource
+            .iter()
+            .find(|(k, _)| k.as_str() == "custom.key")
+            .map(|(_, v)| v.to_string());
+        assert_eq!(custom_attr.as_deref(), Some("custom-value"));
+    }
+
+    #[test]
+    fn build_tonic_metadata_parses_valid_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), "Bearer token123".to_string());
+        headers.insert("x-custom-header".to_string(), "value".to_string());
+
+        let metadata = build_tonic_metadata(&headers);
+
+        assert_eq!(metadata.len(), 2);
+        assert!(metadata.get("authorization").is_some());
+        assert!(metadata.get("x-custom-header").is_some());
+    }
+
+    #[test]
+    fn build_tonic_metadata_handles_empty_headers() {
+        let headers = HashMap::new();
+        let metadata = build_tonic_metadata(&headers);
+        assert_eq!(metadata.len(), 0);
+    }
 }
