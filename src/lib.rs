@@ -54,19 +54,24 @@ pub use figment;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // In build.rs:
-/// fn main() {
-///     opentelemetry_configuration::emit_rustc_env();
-/// }
+/// In build.rs:
 ///
-/// // In main.rs:
+/// ```
+/// opentelemetry_configuration::emit_rustc_env();
+/// ```
+///
+/// In main.rs:
+///
+/// ```no_run
+/// # fn main() -> Result<(), opentelemetry_configuration::SdkError> {
 /// use opentelemetry_configuration::{OtelSdkBuilder, capture_rust_build_info};
 ///
 /// let _guard = OtelSdkBuilder::new()
 ///     .service_name("my-service")
 ///     .with_rust_build_info(capture_rust_build_info!())
 ///     .build()?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Attributes Added

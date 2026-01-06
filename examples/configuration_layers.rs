@@ -3,7 +3,9 @@
 //! This shows how configuration is merged from multiple sources with clear
 //! precedence: defaults → files → environment variables → programmatic.
 //!
-//! Run with: OTEL_SERVICE_NAME=env-override cargo run --example configuration_layers
+//! ```sh
+//! OTEL_SERVICE_NAME=env-override cargo run --example configuration_layers
+//! ```
 
 use opentelemetry_configuration::{OtelSdkBuilder, Protocol, SdkError};
 

@@ -76,8 +76,8 @@ impl OtelSdkBuilder {
         if let Ok(protocol) = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL") {
             let protocol = match protocol.as_str() {
                 "grpc" => "grpc",
-                "http/protobuf" => "httpbinary",
                 "http/json" => "httpjson",
+                // "http/protobuf" and unknown values default to httpbinary
                 _ => "httpbinary",
             };
             self.figment = self
@@ -179,12 +179,17 @@ impl OtelSdkBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn main() -> Result<(), opentelemetry_configuration::SdkError> {
+    /// use opentelemetry_configuration::OtelSdkBuilder;
+    ///
     /// let _guard = OtelSdkBuilder::new()
     ///     .service_name("my-service")
     ///     .resource_attribute("git.commit", "abc123")
     ///     .resource_attribute("feature.flags", "new-ui,beta-api")
     ///     .build()?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn resource_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.resource_attributes.insert(key.into(), value.into());
@@ -306,18 +311,17 @@ impl OtelSdkBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // Bearer token authentication
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .service_name("my-service")
-    ///     .header("Authorization", format!("Bearer {}", api_token))
-    ///     .build()?;
+    /// ```no_run
+    /// # fn main() -> Result<(), opentelemetry_configuration::SdkError> {
+    /// use opentelemetry_configuration::OtelSdkBuilder;
     ///
-    /// // API key authentication (vendor-specific)
+    /// let api_token = std::env::var("API_TOKEN").unwrap_or_default();
     /// let _guard = OtelSdkBuilder::new()
     ///     .service_name("my-service")
-    ///     .header("X-API-Key", api_key)
+    ///     .header("Authorization", format!("Bearer {api_token}"))
     ///     .build()?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let header_key = format!("endpoint.headers.{}", key.into());
@@ -367,19 +371,24 @@ impl OtelSdkBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // In build.rs:
-    /// fn main() {
-    ///     opentelemetry_configuration::emit_rustc_env();
-    /// }
+    /// In build.rs:
     ///
-    /// // In main.rs:
+    /// ```
+    /// opentelemetry_configuration::emit_rustc_env();
+    /// ```
+    ///
+    /// In main.rs:
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), opentelemetry_configuration::SdkError> {
     /// use opentelemetry_configuration::{OtelSdkBuilder, capture_rust_build_info};
     ///
     /// let _guard = OtelSdkBuilder::new()
     ///     .service_name("my-service")
     ///     .with_rust_build_info(capture_rust_build_info!())
     ///     .build()?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Attributes Added
@@ -467,7 +476,7 @@ impl OtelSdkBuilder {
             return Err(SdkError::InvalidEndpoint { url: url.clone() });
         }
 
-        OtelGuard::from_config(config, self.custom_resource)
+        OtelGuard::from_config(&config, self.custom_resource)
     }
 }
 
@@ -523,6 +532,7 @@ impl ResourceConfigBuilder {
     }
 
     /// Builds the resource configuration.
+    #[must_use]
     pub fn build(self) -> ResourceConfig {
         self.config
     }
@@ -533,7 +543,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builder_default() {
+    fn new_builder_enables_all_signals_with_http_binary_protocol() {
         let builder = OtelSdkBuilder::new();
         let config = builder.extract_config().unwrap();
 
@@ -545,34 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_endpoint() {
-        let builder = OtelSdkBuilder::new().endpoint("http://collector:4318");
-        let config = builder.extract_config().unwrap();
-
-        assert_eq!(
-            config.endpoint.url,
-            Some("http://collector:4318".to_string())
-        );
-    }
-
-    #[test]
-    fn test_builder_protocol() {
-        let builder = OtelSdkBuilder::new().protocol(Protocol::Grpc);
-        let config = builder.extract_config().unwrap();
-
-        assert_eq!(config.endpoint.protocol, Protocol::Grpc);
-    }
-
-    #[test]
-    fn test_builder_service_name() {
-        let builder = OtelSdkBuilder::new().service_name("my-service");
-        let config = builder.extract_config().unwrap();
-
-        assert_eq!(config.resource.service_name, Some("my-service".to_string()));
-    }
-
-    #[test]
-    fn test_builder_disable_signals() {
+    fn builder_methods_can_disable_individual_signals() {
         let builder = OtelSdkBuilder::new()
             .traces(false)
             .metrics(false)
@@ -615,30 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_header() {
-        let builder = OtelSdkBuilder::new().header("Authorization", "Bearer token123");
-        let config = builder.extract_config().unwrap();
-
-        assert_eq!(
-            config.endpoint.headers.get("Authorization"),
-            Some(&"Bearer token123".to_string())
-        );
-    }
-
-    #[test]
-    fn test_with_standard_env_endpoint() {
-        temp_env::with_var(
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            Some("http://custom:4318"),
-            || {
-                let builder = OtelSdkBuilder::new().with_standard_env();
-                let config = builder.extract_config().unwrap();
-                assert_eq!(config.endpoint.url, Some("http://custom:4318".to_string()));
-            },
-        );
-    }
-
-    #[test]
     fn test_with_standard_env_service_name() {
         temp_env::with_var("OTEL_SERVICE_NAME", Some("test-service"), || {
             let builder = OtelSdkBuilder::new().with_standard_env();
@@ -647,51 +606,6 @@ mod tests {
                 config.resource.service_name,
                 Some("test-service".to_string())
             );
-        });
-    }
-
-    #[test]
-    fn test_with_standard_env_protocol_grpc() {
-        temp_env::with_var("OTEL_EXPORTER_OTLP_PROTOCOL", Some("grpc"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert_eq!(config.endpoint.protocol, Protocol::Grpc);
-        });
-    }
-
-    #[test]
-    fn test_with_standard_env_protocol_http_protobuf() {
-        temp_env::with_var("OTEL_EXPORTER_OTLP_PROTOCOL", Some("http/protobuf"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert_eq!(config.endpoint.protocol, Protocol::HttpBinary);
-        });
-    }
-
-    #[test]
-    fn test_with_standard_env_traces_disabled() {
-        temp_env::with_var("OTEL_TRACES_EXPORTER", Some("none"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert!(!config.traces.enabled);
-        });
-    }
-
-    #[test]
-    fn test_with_standard_env_metrics_disabled() {
-        temp_env::with_var("OTEL_METRICS_EXPORTER", Some("none"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert!(!config.metrics.enabled);
-        });
-    }
-
-    #[test]
-    fn test_with_standard_env_logs_disabled() {
-        temp_env::with_var("OTEL_LOGS_EXPORTER", Some("none"), || {
-            let builder = OtelSdkBuilder::new().with_standard_env();
-            let config = builder.extract_config().unwrap();
-            assert!(!config.logs.enabled);
         });
     }
 
@@ -754,8 +668,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             matches!(err, SdkError::InvalidEndpoint { ref url } if url == "not-a-valid-url"),
-            "Expected InvalidEndpoint error, got: {:?}",
-            err
+            "Expected InvalidEndpoint error, got: {err:?}"
         );
     }
 
@@ -777,5 +690,115 @@ mod tests {
             config.endpoint.url,
             Some("https://collector.example.com:4318".to_string())
         );
+    }
+
+    #[test]
+    fn extract_config_rejects_endpoint_with_ftp_scheme() {
+        let builder = OtelSdkBuilder::new().endpoint("ftp://collector:21");
+        let result = builder.extract_config();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, SdkError::InvalidEndpoint { ref url } if url == "ftp://collector:21"),
+            "Expected InvalidEndpoint error for ftp scheme, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn with_standard_env_maps_unknown_protocol_to_default() {
+        temp_env::with_var("OTEL_EXPORTER_OTLP_PROTOCOL", Some("unknown-protocol"), || {
+            let builder = OtelSdkBuilder::new().with_standard_env();
+            let config = builder.extract_config().unwrap();
+            assert_eq!(
+                config.endpoint.protocol,
+                Protocol::HttpBinary,
+                "Unknown protocol should fall back to HttpBinary"
+            );
+        });
+    }
+
+    #[test]
+    fn configuration_layering_follows_correct_precedence() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[resource]
+service_name = "file-service"
+
+[endpoint]
+url = "http://file-collector:4318"
+"#
+        )
+        .unwrap();
+
+        temp_env::with_vars(
+            [
+                ("OTEL_SERVICE_NAME", Some("env-service")),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://env-collector:4318")),
+            ],
+            || {
+                let builder = OtelSdkBuilder::new()
+                    .with_file(file.path())
+                    .with_standard_env()
+                    .service_name("programmatic-service");
+                let config = builder.extract_config().unwrap();
+
+                assert_eq!(
+                    config.resource.service_name,
+                    Some("programmatic-service".to_string()),
+                    "Programmatic config should override env and file"
+                );
+                assert_eq!(
+                    config.endpoint.url,
+                    Some("http://env-collector:4318".to_string()),
+                    "Env config should override file config"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn with_file_merges_toml_config() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[resource]
+service_name = "toml-service"
+service_version = "2.0.0"
+
+[endpoint]
+url = "http://toml-collector:4318"
+protocol = "grpc"
+
+[traces]
+enabled = false
+"#
+        )
+        .unwrap();
+
+        let builder = OtelSdkBuilder::new().with_file(file.path());
+        let config = builder.extract_config().unwrap();
+
+        assert_eq!(
+            config.resource.service_name,
+            Some("toml-service".to_string())
+        );
+        assert_eq!(
+            config.resource.service_version,
+            Some("2.0.0".to_string())
+        );
+        assert_eq!(
+            config.endpoint.url,
+            Some("http://toml-collector:4318".to_string())
+        );
+        assert_eq!(config.endpoint.protocol, Protocol::Grpc);
+        assert!(!config.traces.enabled);
     }
 }

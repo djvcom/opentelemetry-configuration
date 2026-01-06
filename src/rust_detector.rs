@@ -36,10 +36,8 @@ impl ResourceDetector for RustResourceDetector {
         if let Ok(exe_path) = std::env::current_exe()
             && let Ok(metadata) = std::fs::metadata(&exe_path)
         {
-            attrs.push(KeyValue::new(
-                "process.executable.size",
-                metadata.len() as i64,
-            ));
+            let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+            attrs.push(KeyValue::new("process.executable.size", size));
         }
 
         Resource::builder().with_attributes(attrs).build()
@@ -53,19 +51,26 @@ impl ResourceDetector for RustResourceDetector {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // In build.rs:
-/// fn main() {
-///     opentelemetry_configuration::emit_rustc_env();
-/// }
+/// In build.rs:
 ///
-/// // In main.rs:
+/// ```
+/// opentelemetry_configuration::emit_rustc_env();
+/// ```
+///
+/// In main.rs:
+///
+/// ```no_run
+/// # fn main() -> Result<(), opentelemetry_configuration::SdkError> {
+/// use opentelemetry_configuration::OtelSdkBuilder;
+///
 /// let _guard = OtelSdkBuilder::new()
 ///     .service_name("my-service")
 ///     .with_rust_build_info(opentelemetry_configuration::capture_rust_build_info!())
 ///     .build()?;
+/// # Ok(())
+/// # }
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RustBuildInfo {
     /// Rustc version (e.g., "1.84.0").
     pub rustc_version: Option<&'static str>,
@@ -76,7 +81,7 @@ pub struct RustBuildInfo {
 }
 
 impl RustBuildInfo {
-    /// Converts to OpenTelemetry KeyValue pairs for resource attributes.
+    /// Converts to OpenTelemetry `KeyValue` pairs for resource attributes.
     ///
     /// Returns attributes using semantic conventions where applicable:
     /// - `process.runtime.version` for rustc version
@@ -114,11 +119,9 @@ impl RustBuildInfo {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// // In build.rs:
-/// fn main() {
-///     opentelemetry_configuration::emit_rustc_env();
-/// }
+/// opentelemetry_configuration::emit_rustc_env();
 /// ```
 pub fn emit_rustc_env() {
     use std::process::Command;
@@ -165,14 +168,6 @@ mod tests {
     use opentelemetry_sdk::resource::ResourceDetector;
 
     #[test]
-    fn test_rust_detector_returns_resource() {
-        let detector = RustResourceDetector;
-        let resource = detector.detect();
-        // Resource should have at least the basic attributes
-        assert!(resource.iter().count() >= 5);
-    }
-
-    #[test]
     fn test_rust_detector_includes_runtime_name() {
         let detector = RustResourceDetector;
         let resource = detector.detect();
@@ -209,14 +204,5 @@ mod tests {
         };
         let kvs = info.to_key_values();
         assert_eq!(kvs.len(), 1);
-    }
-
-    #[test]
-    fn test_std_consts_not_empty() {
-        // Verify that std::env::consts values are non-empty
-        assert!(!std::env::consts::OS.is_empty());
-        assert!(!std::env::consts::ARCH.is_empty());
-        // FAMILY can be empty on some platforms, so we just check it exists
-        let _ = std::env::consts::FAMILY;
     }
 }

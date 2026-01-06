@@ -35,6 +35,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 ///
 /// On drop, flushes pending telemetry and shuts down providers.
 /// Use [`shutdown()`](Self::shutdown) for explicit error handling.
+#[allow(clippy::struct_field_names)] // Fields follow OpenTelemetry SDK naming conventions
 pub struct OtelGuard {
     tracer_provider: Option<SdkTracerProvider>,
     meter_provider: Option<SdkMeterProvider>,
@@ -42,29 +43,29 @@ pub struct OtelGuard {
 }
 
 impl OtelGuard {
-    /// Creates an OtelGuard from configuration.
+    /// Creates an `OtelGuard` from configuration.
     ///
     /// This is typically called by [`OtelSdkBuilder::build`](super::OtelSdkBuilder::build).
     pub(crate) fn from_config(
-        config: OtelSdkConfig,
+        config: &OtelSdkConfig,
         custom_resource: Option<Resource>,
     ) -> Result<Self, SdkError> {
-        let resource = custom_resource.unwrap_or_else(|| build_resource(&config));
+        let resource = custom_resource.unwrap_or_else(|| build_resource(config));
 
         let tracer_provider = if config.traces.enabled {
-            Some(build_tracer_provider(&config, resource.clone())?)
+            Some(build_tracer_provider(config, resource.clone())?)
         } else {
             None
         };
 
         let meter_provider = if config.metrics.enabled {
-            Some(build_meter_provider(&config, resource.clone())?)
+            Some(build_meter_provider(config, resource.clone())?)
         } else {
             None
         };
 
         let logger_provider = if config.logs.enabled {
-            Some(build_logger_provider(&config, resource)?)
+            Some(build_logger_provider(config, resource)?)
         } else {
             None
         };
@@ -88,7 +89,7 @@ impl OtelGuard {
                 .clone()
                 .or_else(|| config.resource.service_name.clone())
                 .unwrap_or_else(|| "opentelemetry-configuration".to_string());
-            init_subscriber(&tracer_provider, &logger_provider, scope_name)?;
+            init_subscriber(tracer_provider.as_ref(), logger_provider.as_ref(), scope_name)?;
         }
 
         Ok(Self {
@@ -99,16 +100,19 @@ impl OtelGuard {
     }
 
     /// Returns the tracer provider if configured.
+    #[must_use]
     pub fn tracer_provider(&self) -> Option<&SdkTracerProvider> {
         self.tracer_provider.as_ref()
     }
 
     /// Returns the meter provider if configured.
+    #[must_use]
     pub fn meter_provider(&self) -> Option<&SdkMeterProvider> {
         self.meter_provider.as_ref()
     }
 
     /// Returns the logger provider if configured.
+    #[must_use]
     pub fn logger_provider(&self) -> Option<&SdkLoggerProvider> {
         self.logger_provider.as_ref()
     }
@@ -135,6 +139,11 @@ impl OtelGuard {
     }
 
     /// Shuts down all configured providers, returning the first error if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SdkError::Flush`] if flushing a provider fails, or
+    /// [`SdkError::Shutdown`] if shutting down a provider fails.
     pub fn shutdown(mut self) -> Result<(), SdkError> {
         if let Some(provider) = self.tracer_provider.take() {
             provider.force_flush().map_err(SdkError::Flush)?;
@@ -385,8 +394,8 @@ fn build_logger_provider(
 }
 
 fn init_subscriber(
-    tracer_provider: &Option<SdkTracerProvider>,
-    logger_provider: &Option<SdkLoggerProvider>,
+    tracer_provider: Option<&SdkTracerProvider>,
+    logger_provider: Option<&SdkLoggerProvider>,
     scope_name: String,
 ) -> Result<(), SdkError> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -521,8 +530,14 @@ mod tests {
         let metadata = build_tonic_metadata(&headers);
 
         assert_eq!(metadata.len(), 2);
-        assert!(metadata.get("authorization").is_some());
-        assert!(metadata.get("x-custom-header").is_some());
+        assert_eq!(
+            metadata.get("authorization").and_then(|v| v.to_str().ok()),
+            Some("Bearer token123")
+        );
+        assert_eq!(
+            metadata.get("x-custom-header").and_then(|v| v.to_str().ok()),
+            Some("value")
+        );
     }
 
     #[test]
@@ -530,5 +545,93 @@ mod tests {
         let headers = HashMap::new();
         let metadata = build_tonic_metadata(&headers);
         assert_eq!(metadata.len(), 0);
+    }
+
+    #[test]
+    fn build_tonic_metadata_skips_invalid_keys() {
+        let mut headers = HashMap::new();
+        headers.insert("valid-key".to_string(), "value".to_string());
+        headers.insert("invalid key with spaces".to_string(), "value".to_string());
+
+        let metadata = build_tonic_metadata(&headers);
+
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata.get("valid-key").is_some());
+    }
+
+    #[test]
+    fn build_tonic_metadata_skips_invalid_values() {
+        let mut headers = HashMap::new();
+        headers.insert("valid-key".to_string(), "valid-value".to_string());
+        headers.insert("invalid-value-key".to_string(), "value\0with\0nulls".to_string());
+
+        let metadata = build_tonic_metadata(&headers);
+
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata.get("valid-key").is_some());
+    }
+
+    #[test]
+    fn build_resource_auto_detects_lambda_from_environment() {
+        temp_env::with_vars(
+            [
+                ("AWS_LAMBDA_FUNCTION_NAME", Some("test-lambda")),
+                ("AWS_REGION", Some("us-east-1")),
+            ],
+            || {
+                let config = OtelSdkConfig {
+                    resource: crate::config::ResourceConfig {
+                        compute_environment: ComputeEnvironment::Auto,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+
+                let resource = build_resource(&config);
+
+                let faas_name = resource
+                    .iter()
+                    .find(|(k, _)| k.as_str() == "faas.name")
+                    .map(|(_, v)| v.to_string());
+                assert_eq!(faas_name.as_deref(), Some("test-lambda"));
+
+                let cloud_provider = resource
+                    .iter()
+                    .find(|(k, _)| k.as_str() == "cloud.provider")
+                    .map(|(_, v)| v.to_string());
+                assert_eq!(cloud_provider.as_deref(), Some("aws"));
+            },
+        );
+    }
+
+    #[test]
+    fn add_lambda_attributes_handles_missing_optional_vars() {
+        temp_env::with_var("AWS_LAMBDA_FUNCTION_NAME", Some("minimal-lambda"), || {
+            let config = OtelSdkConfig {
+                resource: crate::config::ResourceConfig {
+                    compute_environment: ComputeEnvironment::Lambda,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+
+            let resource = build_resource(&config);
+
+            let cloud_provider = resource
+                .iter()
+                .find(|(k, _)| k.as_str() == "cloud.provider")
+                .map(|(_, v)| v.to_string());
+            assert_eq!(
+                cloud_provider.as_deref(),
+                Some("aws"),
+                "cloud.provider should always be set for Lambda environment"
+            );
+
+            let faas_name = resource
+                .iter()
+                .find(|(k, _)| k.as_str() == "faas.name")
+                .map(|(_, v)| v.to_string());
+            assert_eq!(faas_name.as_deref(), Some("minimal-lambda"));
+        });
     }
 }

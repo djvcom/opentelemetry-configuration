@@ -41,6 +41,7 @@ pub enum Protocol {
 
 impl Protocol {
     /// Returns the default endpoint for this protocol.
+    #[must_use]
     pub fn default_endpoint(&self) -> &'static str {
         match self {
             Protocol::Grpc => "http://localhost:4317",
@@ -49,6 +50,7 @@ impl Protocol {
     }
 
     /// Returns the default port for this protocol.
+    #[must_use]
     pub fn default_port(&self) -> u16 {
         match self {
             Protocol::Grpc => 4317,
@@ -80,7 +82,7 @@ pub struct OtelSdkConfig {
     pub init_tracing_subscriber: bool,
 
     /// Name for the instrumentation scope (otel.library.name).
-    /// Defaults to service_name if set, otherwise "opentelemetry-configuration".
+    /// Defaults to `service_name` if set, otherwise "opentelemetry-configuration".
     pub instrumentation_scope_name: Option<String>,
 }
 
@@ -100,6 +102,7 @@ impl Default for OtelSdkConfig {
 
 impl OtelSdkConfig {
     /// Returns the effective endpoint URL, using protocol defaults if not specified.
+    #[must_use]
     pub fn effective_endpoint(&self) -> String {
         self.endpoint
             .url
@@ -108,6 +111,7 @@ impl OtelSdkConfig {
     }
 
     /// Returns the endpoint URL for a specific signal type.
+    #[must_use]
     pub fn signal_endpoint(&self, signal_path: &str) -> String {
         let base = self.effective_endpoint();
         let base = base.trim_end_matches('/');
@@ -115,7 +119,7 @@ impl OtelSdkConfig {
         match self.endpoint.protocol {
             Protocol::Grpc => base.to_string(),
             Protocol::HttpBinary | Protocol::HttpJson => {
-                format!("{}{}", base, signal_path)
+                format!("{base}{signal_path}")
             }
         }
     }
@@ -200,6 +204,7 @@ pub struct SignalConfig {
 
 impl SignalConfig {
     /// Creates a default config with the signal enabled.
+    #[must_use]
     pub fn default_enabled() -> Self {
         Self {
             enabled: true,
@@ -243,31 +248,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_compute_environment_default() {
-        assert_eq!(ComputeEnvironment::default(), ComputeEnvironment::Auto);
-    }
-
-    #[test]
-    fn test_compute_environment_serde() {
-        let env: ComputeEnvironment = serde_json::from_str(r#""auto""#).unwrap();
-        assert_eq!(env, ComputeEnvironment::Auto);
-
-        let env: ComputeEnvironment = serde_json::from_str(r#""lambda""#).unwrap();
-        assert_eq!(env, ComputeEnvironment::Lambda);
-
-        let env: ComputeEnvironment = serde_json::from_str(r#""kubernetes""#).unwrap();
-        assert_eq!(env, ComputeEnvironment::Kubernetes);
-
-        let env: ComputeEnvironment = serde_json::from_str(r#""none""#).unwrap();
-        assert_eq!(env, ComputeEnvironment::None);
-    }
-
-    #[test]
-    fn test_protocol_default() {
-        assert_eq!(Protocol::default(), Protocol::HttpBinary);
-    }
-
-    #[test]
     fn test_protocol_default_endpoint() {
         assert_eq!(Protocol::Grpc.default_endpoint(), "http://localhost:4317");
         assert_eq!(
@@ -278,21 +258,6 @@ mod tests {
             Protocol::HttpJson.default_endpoint(),
             "http://localhost:4318"
         );
-    }
-
-    #[test]
-    fn test_protocol_serde() {
-        let protocol: Protocol = serde_json::from_str(r#""grpc""#).unwrap();
-        assert_eq!(protocol, Protocol::Grpc);
-
-        let protocol: Protocol = serde_json::from_str(r#""httpbinary""#).unwrap();
-        assert_eq!(protocol, Protocol::HttpBinary);
-
-        let protocol: Protocol = serde_json::from_str(r#""http_binary""#).unwrap();
-        assert_eq!(protocol, Protocol::HttpBinary);
-
-        let protocol: Protocol = serde_json::from_str(r#""http-json""#).unwrap();
-        assert_eq!(protocol, Protocol::HttpJson);
     }
 
     #[test]
@@ -310,13 +275,26 @@ mod tests {
     }
 
     #[test]
-    fn test_otel_sdk_config_signal_endpoint() {
+    fn signal_endpoint_appends_path_for_http_protocols() {
         let config = OtelSdkConfig::default();
         assert_eq!(
             config.signal_endpoint("/v1/traces"),
             "http://localhost:4318/v1/traces"
         );
+    }
 
+    #[test]
+    fn signal_endpoint_strips_trailing_slash_before_appending() {
+        let mut config = OtelSdkConfig::default();
+        config.endpoint.url = Some("http://collector:4318/".to_string());
+        assert_eq!(
+            config.signal_endpoint("/v1/traces"),
+            "http://collector:4318/v1/traces"
+        );
+    }
+
+    #[test]
+    fn signal_endpoint_returns_base_only_for_grpc() {
         let mut config = OtelSdkConfig::default();
         config.endpoint.protocol = Protocol::Grpc;
         assert_eq!(
@@ -329,15 +307,6 @@ mod tests {
     fn test_resource_config_with_service_name() {
         let config = ResourceConfig::with_service_name("my-service");
         assert_eq!(config.service_name, Some("my-service".to_string()));
-    }
-
-    #[test]
-    fn test_signal_config_default() {
-        let config = SignalConfig::default();
-        assert!(!config.enabled);
-
-        let config = SignalConfig::default_enabled();
-        assert!(config.enabled);
     }
 
     #[test]

@@ -39,4 +39,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 mock-collector = "0.2"
 serial_test = "3.2"
 temp-env = { version = "0.3", features = ["async_closure"] }
+tempfile = "3.24.0"
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
