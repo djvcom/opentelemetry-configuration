@@ -4,6 +4,7 @@ use figment::Error as FigmentError;
 
 /// Errors from SDK initialisation and lifecycle.
 #[derive(Debug, thiserror::Error)]
+#[must_use]
 #[non_exhaustive]
 pub enum SdkError {
     /// Failed to extract configuration from sources.

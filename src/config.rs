@@ -119,21 +119,6 @@ impl OtelSdkConfig {
             }
         }
     }
-
-    /// Merges another config into this one, with `other` taking precedence.
-    pub fn merge(mut self, other: Self) -> Self {
-        self.endpoint = self.endpoint.merge(other.endpoint);
-        self.resource = self.resource.merge(other.resource);
-        self.traces = self.traces.merge(other.traces);
-        self.metrics = self.metrics.merge(other.metrics);
-        self.logs = self.logs.merge(other.logs);
-
-        if other.init_tracing_subscriber != Self::default().init_tracing_subscriber {
-            self.init_tracing_subscriber = other.init_tracing_subscriber;
-        }
-
-        self
-    }
 }
 
 /// Endpoint configuration.
@@ -170,23 +155,6 @@ impl Default for EndpointConfig {
     }
 }
 
-impl EndpointConfig {
-    /// Merges another config into this one, with `other` taking precedence.
-    pub fn merge(mut self, other: Self) -> Self {
-        if other.url.is_some() {
-            self.url = other.url;
-        }
-        if other.protocol != Protocol::default() {
-            self.protocol = other.protocol;
-        }
-        if other.timeout != Self::default().timeout {
-            self.timeout = other.timeout;
-        }
-        self.headers.extend(other.headers);
-        self
-    }
-}
-
 /// Resource configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -217,24 +185,6 @@ impl ResourceConfig {
             ..Default::default()
         }
     }
-
-    /// Merges another config into this one, with `other` taking precedence.
-    pub fn merge(mut self, other: Self) -> Self {
-        if other.service_name.is_some() {
-            self.service_name = other.service_name;
-        }
-        if other.service_version.is_some() {
-            self.service_version = other.service_version;
-        }
-        if other.deployment_environment.is_some() {
-            self.deployment_environment = other.deployment_environment;
-        }
-        self.attributes.extend(other.attributes);
-        if other.compute_environment != ComputeEnvironment::default() {
-            self.compute_environment = other.compute_environment;
-        }
-        self
-    }
 }
 
 /// Configuration for an individual signal type (traces, metrics, logs).
@@ -255,13 +205,6 @@ impl SignalConfig {
             enabled: true,
             batch: BatchConfig::default(),
         }
-    }
-
-    /// Merges another config into this one, with `other` taking precedence.
-    pub fn merge(mut self, other: Self) -> Self {
-        self.enabled = other.enabled;
-        self.batch = self.batch.merge(other.batch);
-        self
     }
 }
 
@@ -292,26 +235,6 @@ impl Default for BatchConfig {
             scheduled_delay: Duration::from_secs(5),
             export_timeout: Duration::from_secs(30),
         }
-    }
-}
-
-impl BatchConfig {
-    /// Merges another config into this one, with `other` taking precedence.
-    pub fn merge(mut self, other: Self) -> Self {
-        let default = Self::default();
-        if other.max_queue_size != default.max_queue_size {
-            self.max_queue_size = other.max_queue_size;
-        }
-        if other.max_export_batch_size != default.max_export_batch_size {
-            self.max_export_batch_size = other.max_export_batch_size;
-        }
-        if other.scheduled_delay != default.scheduled_delay {
-            self.scheduled_delay = other.scheduled_delay;
-        }
-        if other.export_timeout != default.export_timeout {
-            self.export_timeout = other.export_timeout;
-        }
-        self
     }
 }
 
@@ -409,32 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_config_merge() {
-        let base = ResourceConfig {
-            service_name: Some("base".to_string()),
-            service_version: Some("1.0.0".to_string()),
-            attributes: [("key1".to_string(), "value1".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let override_config = ResourceConfig {
-            service_name: Some("override".to_string()),
-            attributes: [("key2".to_string(), "value2".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let merged = base.merge(override_config);
-        assert_eq!(merged.service_name, Some("override".to_string()));
-        assert_eq!(merged.service_version, Some("1.0.0".to_string()));
-        assert_eq!(merged.attributes.get("key1"), Some(&"value1".to_string()));
-        assert_eq!(merged.attributes.get("key2"), Some(&"value2".to_string()));
-    }
-
-    #[test]
     fn test_signal_config_default() {
         let config = SignalConfig::default();
         assert!(!config.enabled);
@@ -450,29 +347,5 @@ mod tests {
         assert_eq!(config.max_export_batch_size, 512);
         assert_eq!(config.scheduled_delay, Duration::from_secs(5));
         assert_eq!(config.export_timeout, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn test_endpoint_config_merge() {
-        let base = EndpointConfig {
-            url: Some("http://base:4318".to_string()),
-            headers: [("auth".to_string(), "token1".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let override_config = EndpointConfig {
-            url: Some("http://override:4318".to_string()),
-            headers: [("x-custom".to_string(), "value".to_string())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-
-        let merged = base.merge(override_config);
-        assert_eq!(merged.url, Some("http://override:4318".to_string()));
-        assert_eq!(merged.headers.get("auth"), Some(&"token1".to_string()));
-        assert_eq!(merged.headers.get("x-custom"), Some(&"value".to_string()));
     }
 }

@@ -51,7 +51,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `http` (default) - HTTP OTLP exporter
 - `grpc` - gRPC OTLP exporter via tonic
-
-### Known Limitations
-
-- Fallback export feature defined but not yet wired into pipeline

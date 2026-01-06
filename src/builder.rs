@@ -1,16 +1,9 @@
 //! Builder for OpenTelemetry SDK configuration.
 //!
-//! The builder supports layered configuration from multiple sources:
-//! 1. Compiled defaults (protocol-specific endpoints)
-//! 2. Configuration files (TOML, JSON, YAML)
-//! 3. Environment variables
-//! 4. Programmatic overrides
-//!
-//! Sources are merged in order, with later sources taking precedence.
+//! Supports layered configuration: defaults → files → env vars → programmatic.
 
 use crate::SdkError;
 use crate::config::{ComputeEnvironment, OtelSdkConfig, Protocol, ResourceConfig};
-use crate::fallback::ExportFallback;
 use crate::guard::OtelGuard;
 use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
@@ -24,98 +17,38 @@ use std::path::Path;
 /// ```no_run
 /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
 ///
-/// fn main() -> Result<(), SdkError> {
-///     // Simple case - uses defaults (localhost:4318 for HTTP)
-///     let _guard = OtelSdkBuilder::new().build()?;
-///
-///     // With environment variables
-///     let _guard = OtelSdkBuilder::new()
-///         .with_env("OTEL_")
-///         .build()?;
-///
-///     // Full configuration
-///     let _guard = OtelSdkBuilder::new()
-///         .with_file("/var/task/otel-config.toml")
-///         .with_env("OTEL_")
-///         .endpoint("http://collector:4318")
-///         .service_name("my-lambda")
-///         .build()?;
-///
-///     Ok(())
-/// }
+/// let _guard = OtelSdkBuilder::new()
+///     .service_name("my-service")
+///     .build()?;
+/// # Ok::<(), SdkError>(())
 /// ```
 #[must_use = "builders do nothing unless .build() is called"]
 pub struct OtelSdkBuilder {
     figment: Figment,
-    fallback: ExportFallback,
     custom_resource: Option<Resource>,
     resource_attributes: std::collections::HashMap<String, String>,
 }
 
 impl OtelSdkBuilder {
     /// Creates a new builder with default configuration.
-    ///
-    /// Defaults include:
-    /// - Protocol: HTTP with protobuf encoding
-    /// - Endpoint: `http://localhost:4318` (or 4317 for gRPC)
-    /// - All signals enabled (traces, metrics, logs)
-    /// - Tracing subscriber initialisation enabled
-    /// - Lambda resource detection enabled
     pub fn new() -> Self {
         Self {
             figment: Figment::from(Serialized::defaults(OtelSdkConfig::default())),
-            fallback: ExportFallback::default(),
             custom_resource: None,
             resource_attributes: std::collections::HashMap::new(),
         }
     }
 
-    /// Creates a builder from an existing figment.
-    ///
-    /// This allows power users to construct complex configuration chains
-    /// before passing them to the SDK builder.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use figment::{Figment, providers::{Env, Format, Toml}};
-    /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-    ///
-    /// let figment = Figment::new()
-    ///     .merge(Toml::file("/etc/otel-defaults.toml"))
-    ///     .merge(Toml::file("/var/task/otel-config.toml"))
-    ///     .merge(Env::prefixed("OTEL_").split("_"));
-    ///
-    /// let _guard = OtelSdkBuilder::from_figment(figment)
-    ///     .service_name("my-lambda")
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
+    /// Creates a builder from an existing figment for complex configuration chains.
     pub fn from_figment(figment: Figment) -> Self {
         Self {
             figment,
-            fallback: ExportFallback::default(),
             custom_resource: None,
             resource_attributes: std::collections::HashMap::new(),
         }
     }
 
-    /// Merges configuration from a TOML file.
-    ///
-    /// If the file doesn't exist, it's silently skipped.
-    /// This allows optional configuration files that may or may not be present.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-    ///
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .with_file("/var/task/otel-config.toml")  // Optional
-    ///     .with_file("./otel-local.toml")           // For development
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
+    /// Merges configuration from a TOML file. Missing files are silently skipped.
     pub fn with_file<P: AsRef<Path>>(mut self, path: P) -> Self {
         let path = path.as_ref();
         if path.exists() {
@@ -126,45 +59,13 @@ impl OtelSdkBuilder {
 
     /// Merges configuration from environment variables with the given prefix.
     ///
-    /// Environment variables are split on underscores to match nested config.
-    /// For example, with prefix `OTEL_`:
-    /// - `OTEL_ENDPOINT_URL` → `endpoint.url`
-    /// - `OTEL_ENDPOINT_PROTOCOL` → `endpoint.protocol`
-    /// - `OTEL_TRACES_ENABLED` → `traces.enabled`
-    /// - `OTEL_RESOURCE_SERVICE_NAME` → `resource.service_name`
-    ///
-    /// # Example
-    ///
-    /// ```bash
-    /// export OTEL_ENDPOINT_URL=http://collector:4318
-    /// export OTEL_ENDPOINT_PROTOCOL=grpc
-    /// export OTEL_TRACES_ENABLED=true
-    /// export OTEL_RESOURCE_SERVICE_NAME=my-lambda
-    /// ```
-    ///
-    /// ```no_run
-    /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-    ///
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .with_env("OTEL_")
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
+    /// Variables are split on underscores: `PREFIX_FOO_BAR` → `foo.bar`.
     pub fn with_env(mut self, prefix: &str) -> Self {
         self.figment = self.figment.merge(Env::prefixed(prefix).split("_"));
         self
     }
 
-    /// Merges configuration from standard OpenTelemetry environment variables.
-    ///
-    /// This reads the standard `OTEL_*` environment variables as defined by
-    /// the OpenTelemetry specification:
-    /// - `OTEL_EXPORTER_OTLP_ENDPOINT` → endpoint URL
-    /// - `OTEL_EXPORTER_OTLP_PROTOCOL` → protocol (grpc, http/protobuf, http/json)
-    /// - `OTEL_SERVICE_NAME` → service name
-    /// - `OTEL_TRACES_EXPORTER` → traces exporter (otlp, none)
-    /// - `OTEL_METRICS_EXPORTER` → metrics exporter (otlp, none)
-    /// - `OTEL_LOGS_EXPORTER` → logs exporter (otlp, none)
+    /// Merges standard `OTEL_*` environment variables per OpenTelemetry spec.
     pub fn with_standard_env(mut self) -> Self {
         if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
             self.figment = self
@@ -214,23 +115,7 @@ impl OtelSdkBuilder {
         self
     }
 
-    /// Sets the OTLP endpoint URL explicitly.
-    ///
-    /// This overrides any configuration from files or environment variables.
-    ///
-    /// For HTTP protocols, signal-specific paths (`/v1/traces`, `/v1/metrics`,
-    /// `/v1/logs`) are appended automatically.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-    ///
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .endpoint("http://collector.internal:4318")
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
+    /// Sets the OTLP endpoint URL. For HTTP, signal paths are appended automatically.
     pub fn endpoint(mut self, url: impl Into<String>) -> Self {
         self.figment = self
             .figment
@@ -414,73 +299,6 @@ impl OtelSdkBuilder {
         self
     }
 
-    /// Sets the fallback strategy for failed exports (planned feature).
-    ///
-    /// **Note:** The fallback API is defined but not yet wired into the export
-    /// pipeline. The handler will be stored but not invoked on export failures.
-    /// Full implementation is planned for a future release.
-    ///
-    /// When implemented, the fallback handler will be called when an export
-    /// fails after all retry attempts have been exhausted. It will receive the
-    /// original OTLP request payload, which can be preserved via alternative
-    /// transport.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use opentelemetry_configuration::{OtelSdkBuilder, ExportFallback, SdkError};
-    ///
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .fallback(ExportFallback::Stdout)
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
-    pub fn fallback(mut self, fallback: ExportFallback) -> Self {
-        self.fallback = fallback;
-        self
-    }
-
-    /// Sets a custom fallback handler using a closure (planned feature).
-    ///
-    /// **Note:** The fallback API is defined but not yet wired into the export
-    /// pipeline. The handler will be stored but not invoked on export failures.
-    /// Full implementation is planned for a future release.
-    ///
-    /// When implemented, the closure will receive the full
-    /// [`ExportFailure`](super::ExportFailure) including the original OTLP
-    /// request payload.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-    ///
-    /// let _guard = OtelSdkBuilder::new()
-    ///     .with_fallback(|failure| {
-    ///         // Write the protobuf payload to S3, a queue, etc.
-    ///         let bytes = failure.request.to_protobuf();
-    ///         eprintln!(
-    ///             "Failed to export {} ({} bytes): {}",
-    ///             failure.request.signal_type(),
-    ///             bytes.len(),
-    ///             failure.error
-    ///         );
-    ///         Ok(())
-    ///     })
-    ///     .build()?;
-    /// # Ok::<(), SdkError>(())
-    /// ```
-    pub fn with_fallback<F>(mut self, f: F) -> Self
-    where
-        F: Fn(super::ExportFailure) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.fallback = ExportFallback::custom(f);
-        self
-    }
-
     /// Adds an HTTP header to all export requests.
     ///
     /// Headers are applied to trace, metric, and log exporters. Common uses include
@@ -649,7 +467,7 @@ impl OtelSdkBuilder {
             return Err(SdkError::InvalidEndpoint { url: url.clone() });
         }
 
-        OtelGuard::from_config(config, self.fallback, self.custom_resource)
+        OtelGuard::from_config(config, self.custom_resource)
     }
 }
 
@@ -805,18 +623,6 @@ mod tests {
             config.endpoint.headers.get("Authorization"),
             Some(&"Bearer token123".to_string())
         );
-    }
-
-    #[test]
-    fn test_builder_fallback() {
-        let builder = OtelSdkBuilder::new().fallback(ExportFallback::Stdout);
-        assert!(matches!(builder.fallback, ExportFallback::Stdout));
-    }
-
-    #[test]
-    fn test_builder_custom_fallback() {
-        let builder = OtelSdkBuilder::new().with_fallback(|_failure| Ok(()));
-        assert!(matches!(builder.fallback, ExportFallback::Custom(_)));
     }
 
     #[test]

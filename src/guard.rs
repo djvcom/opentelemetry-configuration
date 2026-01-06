@@ -6,7 +6,6 @@
 
 use crate::config::{ComputeEnvironment, OtelSdkConfig, Protocol};
 use crate::error::SdkError;
-use crate::fallback::ExportFallback;
 use crate::rust_detector::RustResourceDetector;
 use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapCompositePropagator;
@@ -34,41 +33,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Guard that manages OpenTelemetry provider lifecycle.
 ///
-/// When this guard is dropped, it automatically flushes and shuts down all
-/// configured providers. This ensures telemetry is exported before the
-/// application exits or the execution environment freezes.
-///
-/// # Drop Behaviour
-///
-/// On drop, each provider (tracer, logger, meter) is:
-/// 1. Flushed to export pending data
-/// 2. Shut down to release resources
-///
-/// Errors during shutdown are logged via `tracing::error` but do not panic.
-/// For explicit error handling, use [`shutdown()`](Self::shutdown) before drop.
-///
-/// # Example
-///
-/// ```no_run
-/// use opentelemetry_configuration::{OtelSdkBuilder, SdkError};
-///
-/// fn main() -> Result<(), SdkError> {
-///     let _guard = OtelSdkBuilder::new()
-///         .service_name("my-service")
-///         .build()?;
-///
-///     tracing::info!("Application running");
-///
-///     // Guard dropped here: providers flushed and shut down automatically
-///     Ok(())
-/// }
-/// ```
+/// On drop, flushes pending telemetry and shuts down providers.
+/// Use [`shutdown()`](Self::shutdown) for explicit error handling.
 pub struct OtelGuard {
     tracer_provider: Option<SdkTracerProvider>,
     meter_provider: Option<SdkMeterProvider>,
     logger_provider: Option<SdkLoggerProvider>,
-    #[allow(dead_code)]
-    fallback: ExportFallback,
 }
 
 impl OtelGuard {
@@ -77,7 +47,6 @@ impl OtelGuard {
     /// This is typically called by [`OtelSdkBuilder::build`](super::OtelSdkBuilder::build).
     pub(crate) fn from_config(
         config: OtelSdkConfig,
-        fallback: ExportFallback,
         custom_resource: Option<Resource>,
     ) -> Result<Self, SdkError> {
         let resource = custom_resource.unwrap_or_else(|| build_resource(&config));
@@ -126,7 +95,6 @@ impl OtelGuard {
             tracer_provider,
             meter_provider,
             logger_provider,
-            fallback,
         })
     }
 
@@ -145,42 +113,28 @@ impl OtelGuard {
         self.logger_provider.as_ref()
     }
 
-    /// Flushes all configured providers.
-    ///
-    /// This method is called automatically on drop, but can be called manually
-    /// if you need to ensure telemetry is exported at a specific point.
-    ///
-    /// Flush errors are logged via `tracing::warn!` with target `otel_lifecycle`.
-    /// To see these warnings, enable the target in your `RUST_LOG` filter:
-    /// `RUST_LOG=otel_lifecycle=warn`
+    /// Flushes all configured providers. Errors are logged but not returned.
     pub fn flush(&self) {
         if let Some(provider) = &self.tracer_provider
             && let Err(e) = provider.force_flush()
         {
-            tracing::warn!(target: "otel_lifecycle", error = %e, "Failed to flush tracer provider");
+            tracing::error!(target: "otel_lifecycle", error = %e, "Failed to flush tracer provider");
         }
 
         if let Some(provider) = &self.meter_provider
             && let Err(e) = provider.force_flush()
         {
-            tracing::warn!(target: "otel_lifecycle", error = %e, "Failed to flush meter provider");
+            tracing::error!(target: "otel_lifecycle", error = %e, "Failed to flush meter provider");
         }
 
         if let Some(provider) = &self.logger_provider
             && let Err(e) = provider.force_flush()
         {
-            tracing::warn!(target: "otel_lifecycle", error = %e, "Failed to flush logger provider");
+            tracing::error!(target: "otel_lifecycle", error = %e, "Failed to flush logger provider");
         }
     }
 
-    /// Shuts down all configured providers.
-    ///
-    /// This consumes the guard and shuts down all providers immediately.
-    /// Any further attempts to use the providers will fail.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first error encountered during shutdown.
+    /// Shuts down all configured providers, returning the first error if any.
     pub fn shutdown(mut self) -> Result<(), SdkError> {
         if let Some(provider) = self.tracer_provider.take() {
             provider.force_flush().map_err(SdkError::Flush)?;
@@ -321,53 +275,60 @@ fn build_tonic_metadata(headers: &HashMap<String, String>) -> MetadataMap {
     metadata
 }
 
+macro_rules! build_exporter {
+    ($config:expr, $exporter_type:ident, $signal_path:expr, $error_variant:ident) => {{
+        match $config.endpoint.protocol {
+            Protocol::Grpc => {
+                let endpoint = $config.effective_endpoint();
+                let mut builder = opentelemetry_otlp::$exporter_type::builder()
+                    .with_tonic()
+                    .with_endpoint(&endpoint)
+                    .with_timeout($config.endpoint.timeout);
+
+                if !$config.endpoint.headers.is_empty() {
+                    builder =
+                        builder.with_metadata(build_tonic_metadata(&$config.endpoint.headers));
+                }
+
+                builder.build().map_err(SdkError::$error_variant)?
+            }
+            Protocol::HttpBinary => {
+                let endpoint = $config.signal_endpoint($signal_path);
+                let mut builder = opentelemetry_otlp::$exporter_type::builder()
+                    .with_http()
+                    .with_endpoint(&endpoint)
+                    .with_timeout($config.endpoint.timeout)
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
+
+                if !$config.endpoint.headers.is_empty() {
+                    builder = builder.with_headers($config.endpoint.headers.clone());
+                }
+
+                builder.build().map_err(SdkError::$error_variant)?
+            }
+            Protocol::HttpJson => {
+                let endpoint = $config.signal_endpoint($signal_path);
+                let mut builder = opentelemetry_otlp::$exporter_type::builder()
+                    .with_http()
+                    .with_endpoint(&endpoint)
+                    .with_timeout($config.endpoint.timeout)
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson);
+
+                if !$config.endpoint.headers.is_empty() {
+                    builder = builder.with_headers($config.endpoint.headers.clone());
+                }
+
+                builder.build().map_err(SdkError::$error_variant)?
+            }
+        }
+    }};
+}
+
 fn build_tracer_provider(
     config: &OtelSdkConfig,
     resource: Resource,
 ) -> Result<SdkTracerProvider, SdkError> {
-    let exporter = match config.endpoint.protocol {
-        Protocol::Grpc => {
-            let endpoint = config.effective_endpoint();
-            let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
-            }
-
-            builder.build().map_err(SdkError::TraceExporter)?
-        }
-        Protocol::HttpBinary => {
-            let endpoint = config.signal_endpoint("/v1/traces");
-            let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::TraceExporter)?
-        }
-        Protocol::HttpJson => {
-            let endpoint = config.signal_endpoint("/v1/traces");
-            let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpJson);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::TraceExporter)?
-        }
-    };
+    let exporter = build_exporter!(config, SpanExporter, "/v1/traces", TraceExporter);
 
     let batch_config = TraceBatchConfigBuilder::default()
         .with_max_queue_size(config.traces.batch.max_queue_size)
@@ -389,49 +350,7 @@ fn build_meter_provider(
     config: &OtelSdkConfig,
     resource: Resource,
 ) -> Result<SdkMeterProvider, SdkError> {
-    let exporter = match config.endpoint.protocol {
-        Protocol::Grpc => {
-            let endpoint = config.effective_endpoint();
-            let mut builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
-            }
-
-            builder.build().map_err(SdkError::MetricExporter)?
-        }
-        Protocol::HttpBinary => {
-            let endpoint = config.signal_endpoint("/v1/metrics");
-            let mut builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::MetricExporter)?
-        }
-        Protocol::HttpJson => {
-            let endpoint = config.signal_endpoint("/v1/metrics");
-            let mut builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpJson);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::MetricExporter)?
-        }
-    };
+    let exporter = build_exporter!(config, MetricExporter, "/v1/metrics", MetricExporter);
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
         .with_interval(config.metrics.batch.scheduled_delay)
@@ -447,49 +366,7 @@ fn build_logger_provider(
     config: &OtelSdkConfig,
     resource: Resource,
 ) -> Result<SdkLoggerProvider, SdkError> {
-    let exporter = match config.endpoint.protocol {
-        Protocol::Grpc => {
-            let endpoint = config.effective_endpoint();
-            let mut builder = opentelemetry_otlp::LogExporter::builder()
-                .with_tonic()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_metadata(build_tonic_metadata(&config.endpoint.headers));
-            }
-
-            builder.build().map_err(SdkError::LogExporter)?
-        }
-        Protocol::HttpBinary => {
-            let endpoint = config.signal_endpoint("/v1/logs");
-            let mut builder = opentelemetry_otlp::LogExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::LogExporter)?
-        }
-        Protocol::HttpJson => {
-            let endpoint = config.signal_endpoint("/v1/logs");
-            let mut builder = opentelemetry_otlp::LogExporter::builder()
-                .with_http()
-                .with_endpoint(&endpoint)
-                .with_timeout(config.endpoint.timeout)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpJson);
-
-            if !config.endpoint.headers.is_empty() {
-                builder = builder.with_headers(config.endpoint.headers.clone());
-            }
-
-            builder.build().map_err(SdkError::LogExporter)?
-        }
-    };
+    let exporter = build_exporter!(config, LogExporter, "/v1/logs", LogExporter);
 
     let batch_config = LogBatchConfigBuilder::default()
         .with_max_queue_size(config.logs.batch.max_queue_size)
