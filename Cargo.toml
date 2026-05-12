@@ -19,7 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 figment = { version = "0.10", features = ["env", "toml"] }
 humantime-serde = "1.1"
-opentelemetry = "0.31"
+opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-appender-tracing = "0.31"
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "trace", "logs", "metrics"] }
