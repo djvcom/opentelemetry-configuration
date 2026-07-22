@@ -90,6 +90,7 @@ scheduled_delay = "5s"
 
 [metrics]
 enabled = true
+temporality = "delta"  # or "cumulative", "lowmemory"
 
 [logs]
 enabled = true
@@ -104,6 +105,25 @@ The batch processor settings control how telemetry data is batched before export
 | `max_queue_size` | 2048 | Maximum spans/logs buffered before dropping |
 | `max_export_batch_size` | 512 | Maximum items per export batch |
 | `scheduled_delay` | 5s | Interval between export attempts |
+
+## Metric Temporality
+
+Metric export uses delta temporality by default, which vendor backends such as
+Datadog and Dynatrace expect. Prometheus-style backends need cumulative
+temporality instead:
+
+```rust
+use opentelemetry_configuration::{OtelSdkBuilder, Temporality};
+
+let _guard = OtelSdkBuilder::new()
+    .service_name("my-service")
+    .metrics_temporality(Temporality::Cumulative)
+    .build()?;
+```
+
+The standard `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` environment
+variable (`delta`, `cumulative`, or `lowmemory`) is honoured when
+`with_standard_env()` is used.
 
 ## Protocol Support
 

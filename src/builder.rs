@@ -3,7 +3,7 @@
 //! Supports layered configuration: defaults → files → env vars → programmatic.
 
 use crate::SdkError;
-use crate::config::{ComputeEnvironment, OtelSdkConfig, Protocol, ResourceConfig};
+use crate::config::{ComputeEnvironment, OtelSdkConfig, Protocol, ResourceConfig, Temporality};
 use crate::guard::OtelGuard;
 use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
@@ -110,6 +110,21 @@ impl OtelSdkBuilder {
             self.figment = self
                 .figment
                 .merge(Serialized::default("logs.enabled", enabled));
+        }
+
+        if let Ok(preference) = std::env::var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE") {
+            let temporality = match preference.to_lowercase().as_str() {
+                "cumulative" => Some("cumulative"),
+                "delta" => Some("delta"),
+                "lowmemory" => Some("lowmemory"),
+                // Invalid values keep the configured default
+                _ => None,
+            };
+            if let Some(temporality) = temporality {
+                self.figment = self
+                    .figment
+                    .merge(Serialized::default("metrics.temporality", temporality));
+            }
         }
 
         self
@@ -279,6 +294,23 @@ impl OtelSdkBuilder {
         self.figment = self
             .figment
             .merge(Serialized::default("metrics.enabled", enabled));
+        self
+    }
+
+    /// Sets the aggregation temporality preference for metric export.
+    ///
+    /// Default: [`Temporality::Delta`], which most vendor backends
+    /// (e.g. Datadog, Dynatrace) expect. Set [`Temporality::Cumulative`]
+    /// for Prometheus-style backends.
+    pub fn metrics_temporality(mut self, temporality: Temporality) -> Self {
+        let temporality_str = match temporality {
+            Temporality::Delta => "delta",
+            Temporality::Cumulative => "cumulative",
+            Temporality::LowMemory => "lowmemory",
+        };
+        self.figment = self
+            .figment
+            .merge(Serialized::default("metrics.temporality", temporality_str));
         self
     }
 
@@ -830,6 +862,79 @@ enabled = false
             config.endpoint.headers.get("X-Another"),
             Some(&"value2".to_string())
         );
+    }
+
+    #[test]
+    fn metrics_temporality_defaults_to_delta() {
+        let config = OtelSdkBuilder::new().extract_config().unwrap();
+        assert_eq!(config.metrics.temporality, Temporality::Delta);
+    }
+
+    #[test]
+    fn metrics_temporality_can_be_set_programmatically() {
+        let builder = OtelSdkBuilder::new().metrics_temporality(Temporality::Cumulative);
+        let config = builder.extract_config().unwrap();
+
+        assert_eq!(config.metrics.temporality, Temporality::Cumulative);
+    }
+
+    #[test]
+    fn with_standard_env_reads_temporality_preference() {
+        temp_env::with_var(
+            "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+            Some("cumulative"),
+            || {
+                let builder = OtelSdkBuilder::new().with_standard_env();
+                let config = builder.extract_config().unwrap();
+                assert_eq!(config.metrics.temporality, Temporality::Cumulative);
+            },
+        );
+    }
+
+    #[test]
+    fn with_standard_env_temporality_preference_is_case_insensitive() {
+        temp_env::with_var(
+            "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+            Some("LowMemory"),
+            || {
+                let builder = OtelSdkBuilder::new().with_standard_env();
+                let config = builder.extract_config().unwrap();
+                assert_eq!(config.metrics.temporality, Temporality::LowMemory);
+            },
+        );
+    }
+
+    #[test]
+    fn with_standard_env_ignores_invalid_temporality_preference() {
+        temp_env::with_var(
+            "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+            Some("sideways"),
+            || {
+                let builder = OtelSdkBuilder::new().with_standard_env();
+                let config = builder.extract_config().unwrap();
+                assert_eq!(config.metrics.temporality, Temporality::Delta);
+            },
+        );
+    }
+
+    #[test]
+    fn with_file_reads_metrics_temporality() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[metrics]
+temporality = "cumulative"
+"#
+        )
+        .unwrap();
+
+        let builder = OtelSdkBuilder::new().with_file(file.path());
+        let config = builder.extract_config().unwrap();
+
+        assert_eq!(config.metrics.temporality, Temporality::Cumulative);
     }
 
     #[test]

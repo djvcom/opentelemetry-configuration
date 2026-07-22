@@ -59,6 +59,33 @@ impl Protocol {
     }
 }
 
+/// Aggregation temporality preference for metric export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Temporality {
+    /// Measurements reset at each export cycle. Expected by backends such as
+    /// Datadog and Dynatrace.
+    #[default]
+    Delta,
+    /// Measurements accumulate from a fixed start time. The OpenTelemetry
+    /// specification default, expected by Prometheus-style backends.
+    Cumulative,
+    /// Delta temporality for synchronous counters and histograms, allowing
+    /// memory to be shed after a cardinality explosion.
+    #[serde(alias = "low_memory", alias = "low-memory")]
+    LowMemory,
+}
+
+impl From<Temporality> for opentelemetry_sdk::metrics::Temporality {
+    fn from(value: Temporality) -> Self {
+        match value {
+            Temporality::Delta => Self::Delta,
+            Temporality::Cumulative => Self::Cumulative,
+            Temporality::LowMemory => Self::LowMemory,
+        }
+    }
+}
+
 /// Complete OpenTelemetry SDK configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -73,7 +100,7 @@ pub struct OtelSdkConfig {
     pub traces: SignalConfig,
 
     /// Metrics configuration.
-    pub metrics: SignalConfig,
+    pub metrics: MetricsConfig,
 
     /// Logs configuration.
     pub logs: SignalConfig,
@@ -92,7 +119,7 @@ impl Default for OtelSdkConfig {
             endpoint: EndpointConfig::default(),
             resource: ResourceConfig::default(),
             traces: SignalConfig::default_enabled(),
-            metrics: SignalConfig::default_enabled(),
+            metrics: MetricsConfig::default_enabled(),
             logs: SignalConfig::default_enabled(),
             init_tracing_subscriber: true,
             instrumentation_scope_name: None,
@@ -213,6 +240,33 @@ impl SignalConfig {
     }
 }
 
+/// Configuration for the metrics signal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetricsConfig {
+    /// Whether metrics are enabled.
+    pub enabled: bool,
+
+    /// Periodic export configuration.
+    pub batch: BatchConfig,
+
+    /// Aggregation temporality preference for exported metrics.
+    ///
+    /// Defaults to [`Temporality::Delta`].
+    pub temporality: Temporality,
+}
+
+impl MetricsConfig {
+    /// Creates a default config with metrics enabled.
+    #[must_use]
+    pub fn default_enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+}
+
 /// Batch exporter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -307,6 +361,51 @@ mod tests {
     fn test_resource_config_with_service_name() {
         let config = ResourceConfig::with_service_name("my-service");
         assert_eq!(config.service_name, Some("my-service".to_string()));
+    }
+
+    #[test]
+    fn metrics_config_defaults_to_delta_temporality() {
+        let config = OtelSdkConfig::default();
+        assert_eq!(config.metrics.temporality, Temporality::Delta);
+        assert!(config.metrics.enabled);
+    }
+
+    #[test]
+    fn temporality_deserialises_from_lowercase_names() {
+        let delta: Temporality = serde_json::from_str("\"delta\"").unwrap();
+        let cumulative: Temporality = serde_json::from_str("\"cumulative\"").unwrap();
+        let low_memory: Temporality = serde_json::from_str("\"lowmemory\"").unwrap();
+
+        assert_eq!(delta, Temporality::Delta);
+        assert_eq!(cumulative, Temporality::Cumulative);
+        assert_eq!(low_memory, Temporality::LowMemory);
+    }
+
+    #[test]
+    fn temporality_accepts_low_memory_aliases() {
+        let snake: Temporality = serde_json::from_str("\"low_memory\"").unwrap();
+        let kebab: Temporality = serde_json::from_str("\"low-memory\"").unwrap();
+
+        assert_eq!(snake, Temporality::LowMemory);
+        assert_eq!(kebab, Temporality::LowMemory);
+    }
+
+    #[test]
+    fn temporality_converts_to_sdk_temporality() {
+        use opentelemetry_sdk::metrics::Temporality as SdkTemporality;
+
+        assert_eq!(
+            SdkTemporality::from(Temporality::Delta),
+            SdkTemporality::Delta
+        );
+        assert_eq!(
+            SdkTemporality::from(Temporality::Cumulative),
+            SdkTemporality::Cumulative
+        );
+        assert_eq!(
+            SdkTemporality::from(Temporality::LowMemory),
+            SdkTemporality::LowMemory
+        );
     }
 
     #[test]
