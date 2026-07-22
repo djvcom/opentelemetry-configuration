@@ -29,8 +29,8 @@ mod rust_detector;
 
 pub use builder::{OtelSdkBuilder, ResourceConfigBuilder};
 pub use config::{
-    BatchConfig, ComputeEnvironment, EndpointConfig, OtelSdkConfig, Protocol, ResourceConfig,
-    SignalConfig,
+    BatchConfig, ComputeEnvironment, EndpointConfig, MetricsConfig, OtelSdkConfig, Protocol,
+    ResourceConfig, SignalConfig, Temporality,
 };
 pub use error::SdkError;
 pub use guard::OtelGuard;

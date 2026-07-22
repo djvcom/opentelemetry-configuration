@@ -289,14 +289,15 @@ fn build_tonic_metadata(headers: &HashMap<String, String>) -> MetadataMap {
 }
 
 macro_rules! build_exporter {
-    ($config:expr, $exporter_type:ident, $signal_path:expr, $error_variant:ident) => {{
+    ($config:expr, $exporter_type:ident, $signal_path:expr, $error_variant:ident $(, $method:ident($arg:expr))*) => {{
         match $config.endpoint.protocol {
             Protocol::Grpc => {
                 let endpoint = $config.effective_endpoint();
                 let mut builder = opentelemetry_otlp::$exporter_type::builder()
                     .with_tonic()
                     .with_endpoint(&endpoint)
-                    .with_timeout($config.endpoint.timeout);
+                    .with_timeout($config.endpoint.timeout)
+                    $(.$method($arg))*;
 
                 if !$config.endpoint.headers.is_empty() {
                     builder =
@@ -311,7 +312,8 @@ macro_rules! build_exporter {
                     .with_http()
                     .with_endpoint(&endpoint)
                     .with_timeout($config.endpoint.timeout)
-                    .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+                    $(.$method($arg))*;
 
                 if !$config.endpoint.headers.is_empty() {
                     builder = builder.with_headers($config.endpoint.headers.clone());
@@ -325,7 +327,8 @@ macro_rules! build_exporter {
                     .with_http()
                     .with_endpoint(&endpoint)
                     .with_timeout($config.endpoint.timeout)
-                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson);
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
+                    $(.$method($arg))*;
 
                 if !$config.endpoint.headers.is_empty() {
                     builder = builder.with_headers($config.endpoint.headers.clone());
@@ -363,7 +366,13 @@ fn build_meter_provider(
     config: &OtelSdkConfig,
     resource: Resource,
 ) -> Result<SdkMeterProvider, SdkError> {
-    let exporter = build_exporter!(config, MetricExporter, "/v1/metrics", MetricExporter);
+    let exporter = build_exporter!(
+        config,
+        MetricExporter,
+        "/v1/metrics",
+        MetricExporter,
+        with_temporality(config.metrics.temporality.into())
+    );
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
         .with_interval(config.metrics.batch.scheduled_delay)
