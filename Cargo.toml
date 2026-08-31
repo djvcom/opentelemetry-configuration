@@ -24,7 +24,7 @@ opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-appender-tracing = "0.32"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "trace", "logs", "metrics", "http-json"] }
 opentelemetry-proto = { version = "0.32", features = ["gen-tonic-messages", "with-serde", "trace"] }
-opentelemetry-resource-detectors = "0.11"
+opentelemetry-resource-detectors = "0.12"
 opentelemetry-semantic-conventions = "0.32"
 prost = "0.14"
 serde = { version = "1.0", features = ["derive"] }
